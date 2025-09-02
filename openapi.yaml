@@ -1,0 +1,421 @@
+openapi: 3.0.3
+info:
+  title: URL Shortener API
+  version: 1.0.0
+  description: A production-ready URL shortener service with password protection and expiry features
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://api.urlshortener.com
+    description: Production server
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Check if the service is running and healthy
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "OK"
+
+  /v1/links:
+    post:
+      summary: Create a new short link
+      description: Create a shortened URL with optional password protection, expiry, and custom alias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - long_url
+              properties:
+                long_url:
+                  type: string
+                  format: uri
+                  description: The original URL to shorten
+                  example: "https://example.com"
+                alias:
+                  type: string
+                  description: Optional custom alias for the short link
+                  example: "my-link"
+                password:
+                  type: string
+                  description: Optional password to protect the link
+                  example: "secret123"
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: Optional expiry timestamp in RFC3339 format
+                  example: "2024-12-31T23:59:59Z"
+                max_clicks:
+                  type: integer
+                  description: Optional maximum number of clicks before expiry
+                  example: 100
+      responses:
+        '201':
+          description: Link created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    description: The short code
+                    example: "abc123"
+                  short_url:
+                    type: string
+                    format: uri
+                    description: The full short URL
+                    example: "http://localhost:8080/r/abc123"
+                  metadata:
+                    type: object
+                    properties:
+                      has_password:
+                        type: boolean
+                        example: true
+                      expires_at:
+                        type: string
+                        format: date-time
+                        example: "2024-12-31T23:59:59Z"
+                      max_clicks:
+                        type: integer
+                        example: 100
+        '400':
+          description: Invalid request (bad URL, invalid alias, etc.)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "invalid URL"
+        '409':
+          description: Alias already exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "alias already exists"
+
+  /v1/links/{code}:
+    get:
+      summary: Get link metadata
+      description: Retrieve metadata for a short link
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The short code
+          example: "abc123"
+      responses:
+        '200':
+          description: Link metadata retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "abc123"
+                  long_url:
+                    type: string
+                    format: uri
+                    example: "https://example.com"
+                  alias:
+                    type: string
+                    nullable: true
+                    example: "my-link"
+                  expires_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: "2024-12-31T23:59:59Z"
+                  max_clicks:
+                    type: integer
+                    nullable: true
+                    example: 100
+                  click_count:
+                    type: integer
+                    example: 42
+                  created_at:
+                    type: string
+                    format: date-time
+                    example: "2024-01-01T00:00:00Z"
+        '404':
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "not found"
+
+    patch:
+      summary: Update a link
+      description: Update link properties (URL, password, expiry, max clicks)
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The short code
+          example: "abc123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                long_url:
+                  type: string
+                  format: uri
+                  description: New URL to redirect to
+                  example: "https://new-example.com"
+                password:
+                  type: string
+                  description: New password for the link
+                  example: "newpassword123"
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: New expiry timestamp
+                  example: "2024-12-31T23:59:59Z"
+                max_clicks:
+                  type: integer
+                  description: New maximum clicks allowed
+                  example: 200
+      responses:
+        '204':
+          description: Link updated successfully
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "invalid URL"
+        '404':
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "not found"
+
+    delete:
+      summary: Delete a link
+      description: Delete a short link (owner only)
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The short code
+          example: "abc123"
+      responses:
+        '204':
+          description: Link deleted successfully
+        '404':
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "not found"
+
+  /v1/links/{code}/verify:
+    post:
+      summary: Verify password for protected link
+      description: Verify password and get access token for password-protected links
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The short code
+          example: "abc123"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - password
+                - csrf_token
+              properties:
+                password:
+                  type: string
+                  description: The password for the link
+                  example: "secret123"
+                csrf_token:
+                  type: string
+                  description: CSRF protection token
+                  example: "csrf_abc123"
+      responses:
+        '200':
+          description: Password verified, access granted
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "verified_abc123=true; Path=/r/abc123; HttpOnly; Max-Age=300"
+        '401':
+          description: Invalid password
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "unauthorized"
+        '403':
+          description: Invalid CSRF token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "invalid csrf token"
+        '404':
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "not found"
+
+  /r/{code}:
+    get:
+      summary: Redirect to original URL
+      description: Redirect to the original URL, with password protection and expiry checks
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The short code
+          example: "abc123"
+      responses:
+        '302':
+          description: Redirect to original URL
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+                example: "https://example.com"
+        '401':
+          description: Password required - returns HTML form
+          content:
+            text/html:
+              schema:
+                type: string
+                example: "<html><body><form>...</form></body></html>"
+        '404':
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "not found"
+        '410':
+          description: Link expired
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "gone"
+
+components:
+  schemas:
+    Link:
+      type: object
+      properties:
+        code:
+          type: string
+          description: The short code
+        long_url:
+          type: string
+          format: uri
+          description: The original URL
+        alias:
+          type: string
+          nullable: true
+          description: Custom alias
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiry timestamp
+        max_clicks:
+          type: integer
+          nullable: true
+          description: Maximum clicks allowed
+        click_count:
+          type: integer
+          description: Current click count
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: verified_{code}
+
+security:
+  - cookieAuth: []
