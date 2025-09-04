@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"url-shortener/pkg/middleware"
 	"url-shortener/pkg/service"
 
 	"github.com/go-chi/chi/v5"
@@ -161,13 +162,20 @@ func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func SetupRoutes(r *chi.Mux, handler *Handler) {
+func SetupRoutes(r *chi.Mux, handler *Handler, oauthMiddleware *middleware.OAuthMiddleware) {
 	r.Get("/health", handler.HealthCheck)
 	r.Route("/v1", func(r chi.Router) {
-		r.Post("/links", handler.CreateLink)
-		r.Get("/links/{code}", handler.GetLink)
-		r.Patch("/links/{code}", handler.UpdateLink)
-		r.Delete("/links/{code}", handler.DeleteLink)
+		if oauthMiddleware != nil {
+			r.With(oauthMiddleware.Authenticate("links:write")).Post("/links", handler.CreateLink)
+			r.With(oauthMiddleware.Authenticate("links:read")).Get("/links/{code}", handler.GetLink)
+			r.With(oauthMiddleware.Authenticate("links:write")).Patch("/links/{code}", handler.UpdateLink)
+			r.With(oauthMiddleware.Authenticate("links:write")).Delete("/links/{code}", handler.DeleteLink)
+		} else {
+			r.Post("/links", handler.CreateLink)
+			r.Get("/links/{code}", handler.GetLink)
+			r.Patch("/links/{code}", handler.UpdateLink)
+			r.Delete("/links/{code}", handler.DeleteLink)
+		}
 		r.Post("/links/{code}/verify", handler.VerifyPassword)
 	})
 	r.Get("/r/{code}", handler.Redirect)

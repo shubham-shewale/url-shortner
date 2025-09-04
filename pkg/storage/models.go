@@ -1,6 +1,10 @@
 package storage
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type Link struct {
 	Code         string     `json:"code" db:"code"`
@@ -11,5 +15,5 @@ type Link struct {
 	MaxClicks    *int       `json:"max_clicks,omitempty" db:"max_clicks"`
 	ClickCount   int        `json:"click_count" db:"click_count"`
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
-	OwnerID      *string    `json:"owner_id,omitempty" db:"owner_id"`
+	OwnerID      *uuid.UUID `json:"owner_id,omitempty" db:"owner_id"`
 }

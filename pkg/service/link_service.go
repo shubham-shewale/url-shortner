@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"url-shortener/pkg/cache"
+	"url-shortener/pkg/middleware"
 	"url-shortener/pkg/storage"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -79,6 +81,12 @@ func (s *LinkService) CreateLink(ctx context.Context, req *CreateLinkRequest) (*
 		passwordHash = &hashStr
 	}
 
+	// Get owner_id from context
+	ownerID := middleware.GetOwnerIDFromContext(ctx)
+	if ownerID == uuid.Nil {
+		return nil, errors.New("owner_id not found in context")
+	}
+
 	link := &storage.Link{
 		Code:         code,
 		LongURL:      req.LongURL,
@@ -88,6 +96,7 @@ func (s *LinkService) CreateLink(ctx context.Context, req *CreateLinkRequest) (*
 		MaxClicks:    req.MaxClicks,
 		ClickCount:   0,
 		CreatedAt:    time.Now(),
+		OwnerID:      &ownerID,
 	}
 
 	err = s.storage.Create(ctx, link)
@@ -201,6 +210,26 @@ func (s *LinkService) IncrementClickCount(ctx context.Context, code string) erro
 }
 
 func (s *LinkService) DeleteLink(ctx context.Context, code string) error {
+	// Get owner_id from context
+	ownerID := middleware.GetOwnerIDFromContext(ctx)
+	if ownerID == uuid.Nil {
+		return errors.New("owner_id not found in context")
+	}
+
+	// Get existing link to check ownership
+	link, err := s.storage.GetByCode(ctx, code)
+	if err != nil {
+		return err
+	}
+	if link == nil {
+		return errors.New("link not found")
+	}
+
+	// Enforce ownership
+	if link.OwnerID == nil || *link.OwnerID != ownerID {
+		return errors.New("access denied: not the owner of this link")
+	}
+
 	// Invalidate cache
 	s.cache.Delete(ctx, code)
 
@@ -215,6 +244,12 @@ type UpdateLinkRequest struct {
 }
 
 func (s *LinkService) UpdateLink(ctx context.Context, code string, req *UpdateLinkRequest) error {
+	// Get owner_id from context
+	ownerID := middleware.GetOwnerIDFromContext(ctx)
+	if ownerID == uuid.Nil {
+		return errors.New("owner_id not found in context")
+	}
+
 	// Get existing link
 	link, err := s.storage.GetByCode(ctx, code)
 	if err != nil {
@@ -222,6 +257,11 @@ func (s *LinkService) UpdateLink(ctx context.Context, code string, req *UpdateLi
 	}
 	if link == nil {
 		return errors.New("link not found")
+	}
+
+	// Enforce ownership
+	if link.OwnerID == nil || *link.OwnerID != ownerID {
+		return errors.New("access denied: not the owner of this link")
 	}
 
 	// Update fields

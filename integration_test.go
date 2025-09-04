@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	stdhttp "net/http"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"url-shortener/pkg/cache"
-	"url-shortener/pkg/http"
+	httpHandlers "url-shortener/pkg/http"
 	"url-shortener/pkg/service"
 	"url-shortener/pkg/storage"
 
@@ -91,10 +91,10 @@ func TestCreateLinkEndpoint(t *testing.T) {
 	mockStorage := newMockLinkStorage()
 	mockCache := &mockLinkCache{}
 	linkService := service.NewLinkService(mockStorage, mockCache, nil) // pool not needed for this test
-	handler := http.NewHandler(linkService)
+	handler := httpHandlers.NewHandler(linkService)
 
 	r := chi.NewRouter()
-	http.SetupRoutes(r, handler)
+	httpHandlers.SetupRoutes(r, handler, nil)
 
 	// Test data
 	reqBody := map[string]interface{}{
@@ -111,7 +111,7 @@ func TestCreateLinkEndpoint(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	// Assert
-	assert.Equal(t, stdhttp.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code)
 
 	var response map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &response)
@@ -125,17 +125,17 @@ func TestHealthCheck(t *testing.T) {
 	mockStorage := newMockLinkStorage()
 	mockCache := &mockLinkCache{}
 	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := http.NewHandler(linkService)
+	handler := httpHandlers.NewHandler(linkService)
 
 	r := chi.NewRouter()
-	http.SetupRoutes(r, handler)
+	httpHandlers.SetupRoutes(r, handler, nil)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, stdhttp.StatusOK, w.Code)
+	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "OK", w.Body.String())
 }
 
@@ -154,10 +154,10 @@ func TestGetLinkEndpoint(t *testing.T) {
 	mockStorage.Create(context.Background(), link)
 
 	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := http.NewHandler(linkService)
+	handler := httpHandlers.NewHandler(linkService)
 
 	r := chi.NewRouter()
-	http.SetupRoutes(r, handler)
+	httpHandlers.SetupRoutes(r, handler, nil)
 
 	// Test GET request
 	req := httptest.NewRequest("GET", "/v1/links/test123", nil)
@@ -165,7 +165,7 @@ func TestGetLinkEndpoint(t *testing.T) {
 
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, stdhttp.StatusOK, w.Code)
+	assert.Equal(t, http.StatusOK, w.Code)
 
 	var response storage.Link
 	json.Unmarshal(w.Body.Bytes(), &response)
@@ -190,10 +190,10 @@ func TestDeleteLinkEndpoint(t *testing.T) {
 	mockStorage.Create(context.Background(), link)
 
 	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := http.NewHandler(linkService)
+	handler := httpHandlers.NewHandler(linkService)
 
 	r := chi.NewRouter()
-	http.SetupRoutes(r, handler)
+	httpHandlers.SetupRoutes(r, handler, nil)
 
 	// Test DELETE request
 	req := httptest.NewRequest("DELETE", "/v1/links/test123", nil)
@@ -201,24 +201,24 @@ func TestDeleteLinkEndpoint(t *testing.T) {
 
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, stdhttp.StatusNoContent, w.Code)
+	assert.Equal(t, http.StatusNoContent, w.Code)
 
 	// Verify link is deleted
 	req2 := httptest.NewRequest("GET", "/v1/links/test123", nil)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 
-	assert.Equal(t, stdhttp.StatusNotFound, w2.Code)
+	assert.Equal(t, http.StatusNotFound, w2.Code)
 }
 
 func TestInvalidURLError(t *testing.T) {
 	mockStorage := newMockLinkStorage()
 	mockCache := &mockLinkCache{}
 	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := http.NewHandler(linkService)
+	handler := httpHandlers.NewHandler(linkService)
 
 	r := chi.NewRouter()
-	http.SetupRoutes(r, handler)
+	httpHandlers.SetupRoutes(r, handler, nil)
 
 	// Test with invalid URL
 	reqBody := map[string]interface{}{
@@ -232,5 +232,5 @@ func TestInvalidURLError(t *testing.T) {
 
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, stdhttp.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

@@ -28,6 +28,8 @@ paths:
     post:
       summary: Create a new short link
       description: Create a shortened URL with optional password protection, expiry, and custom alias
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -114,6 +116,8 @@ paths:
     get:
       summary: Get link metadata
       description: Retrieve metadata for a short link
+      security:
+        - bearerAuth: []
       parameters:
         - name: code
           in: path
@@ -171,6 +175,8 @@ paths:
     patch:
       summary: Update a link
       description: Update link properties (URL, password, expiry, max clicks)
+      security:
+        - bearerAuth: []
       parameters:
         - name: code
           in: path
@@ -231,6 +237,8 @@ paths:
     delete:
       summary: Delete a link
       description: Delete a short link (owner only)
+      security:
+        - bearerAuth: []
       parameters:
         - name: code
           in: path
@@ -412,10 +420,14 @@ components:
           description: Error message
 
   securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
     cookieAuth:
       type: apiKey
       in: cookie
       name: verified_{code}
 
 security:
-  - cookieAuth: []
+  - bearerAuth: []
