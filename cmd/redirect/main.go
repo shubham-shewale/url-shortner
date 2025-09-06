@@ -8,6 +8,8 @@ import (
 
 	"url-shortener/pkg/cache"
 	httphandler "url-shortener/pkg/http"
+	"url-shortener/pkg/logging"
+	"url-shortener/pkg/security"
 	"url-shortener/pkg/service"
 	"url-shortener/pkg/storage"
 
@@ -17,6 +19,13 @@ import (
 )
 
 func main() {
+	// Initialize logger
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	logger := logging.NewLogger(logging.LogLevel(logLevel))
+
 	// DB connection
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -50,10 +59,13 @@ func main() {
 	linkStorage := storage.NewPostgresLinkStorage(pool)
 
 	// Service
-	linkService := service.NewLinkService(linkStorage, linkCache, pool)
+	linkService := service.NewLinkService(linkStorage, linkCache, pool, logger)
+
+	// CSRF Manager (needed for handler constructor, but not used in redirect server)
+	csrfManager := security.NewCSRFTokenManager()
 
 	// Handler
-	handler := httphandler.NewHandler(linkService)
+	handler := httphandler.NewHandler(linkService, csrfManager)
 
 	// Router
 	r := chi.NewRouter()

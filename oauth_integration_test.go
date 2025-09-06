@@ -13,12 +13,15 @@ import (
 
 	"url-shortener/pkg/cache"
 	httpHandlers "url-shortener/pkg/http"
+	"url-shortener/pkg/logging"
 	"url-shortener/pkg/middleware"
+	"url-shortener/pkg/security"
 	"url-shortener/pkg/service"
 	"url-shortener/pkg/storage"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,9 +40,11 @@ func TestOAuthIntegrationWithKeycloak(t *testing.T) {
 	// Setup test infrastructure
 	mockStorage := newOAuthMockLinkStorage()
 	mockCache := &oauthMockLinkCache{}
-	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger)
+	csrfManager := security.NewCSRFTokenManager()
 
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 	// Create OAuth middleware with test configuration
 	oauthConfig := middleware.OAuthConfig{
 		IssuerURL: "http://localhost:8080/realms/url-shortener",
@@ -51,7 +56,8 @@ func TestOAuthIntegrationWithKeycloak(t *testing.T) {
 
 	// Setup router with OAuth middleware
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, oauthMiddleware)
+	noopCSRF := func(next http.Handler) http.Handler { return next }
+	httpHandlers.SetupRoutes(r, handler, oauthMiddleware, noopCSRF)
 
 	// Test 1: Unauthenticated request should return 401
 	t.Run("UnauthenticatedRequest", func(t *testing.T) {
@@ -77,10 +83,14 @@ func TestOAuthIntegrationWithKeycloak(t *testing.T) {
 	// Test 3: Request with valid mock token should work
 	t.Run("ValidMockToken", func(t *testing.T) {
 		// Create a mock handler that bypasses OAuth for testing
-		mockHandler := httpHandlers.NewHandler(linkService)
+		logger2 := logging.NewLogger(logging.LevelInfo)
+		linkService2 := service.NewLinkService(mockStorage, mockCache, nil, logger2)
+		csrfManager2 := security.NewCSRFTokenManager()
+		mockHandler := httpHandlers.NewHandler(linkService2, csrfManager2)
 
 		mockRouter := chi.NewRouter()
-		httpHandlers.SetupRoutes(mockRouter, mockHandler, nil)
+		noopCSRF := func(next http.Handler) http.Handler { return next }
+		httpHandlers.SetupRoutes(mockRouter, mockHandler, nil, noopCSRF)
 
 		req := httptest.NewRequest("POST", "/v1/links", bytes.NewBufferString(`{"long_url":"https://example.com"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -175,12 +185,15 @@ func TestOwnershipEnforcement(t *testing.T) {
 	// Setup test infrastructure
 	mockStorage := newOAuthMockLinkStorage()
 	mockCache := &oauthMockLinkCache{}
-	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger)
+	csrfManager := security.NewCSRFTokenManager()
+
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, nil)
-
+	noopCSRF := func(next http.Handler) http.Handler { return next }
+	httpHandlers.SetupRoutes(r, handler, nil, noopCSRF)
 	// Create a link with owner
 	ownerID := uuid.New()
 	link := &storage.Link{
@@ -233,12 +246,15 @@ func TestRedirectUnprotected(t *testing.T) {
 	// Setup test infrastructure
 	mockStorage := newOAuthMockLinkStorage()
 	mockCache := &oauthMockLinkCache{}
-	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger)
+	csrfManager := security.NewCSRFTokenManager()
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 
 	// Create router without OAuth middleware
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, nil)
+	noopCSRF := func(next http.Handler) http.Handler { return next }
+	httpHandlers.SetupRoutes(r, handler, nil, noopCSRF)
 
 	// Create a test link
 	link := &storage.Link{
@@ -267,16 +283,24 @@ func newOAuthMockLinkStorage() *oauthMockLinkStorage {
 	return &oauthMockLinkStorage{links: make(map[string]*storage.Link)}
 }
 
-func (m *oauthMockLinkStorage) Create(ctx context.Context, link *storage.Link) error {
+func (m *oauthMockLinkStorage) CreateTx(ctx context.Context, tx pgx.Tx, link *storage.Link) error {
 	m.links[link.Code] = link
 	return nil
 }
 
-func (m *oauthMockLinkStorage) GetByCode(ctx context.Context, code string) (*storage.Link, error) {
+func (m *oauthMockLinkStorage) Create(ctx context.Context, link *storage.Link) error {
+	return m.CreateTx(ctx, nil, link)
+}
+
+func (m *oauthMockLinkStorage) GetByCodeTx(ctx context.Context, tx pgx.Tx, code string) (*storage.Link, error) {
 	if link, exists := m.links[code]; exists {
 		return link, nil
 	}
 	return nil, nil
+}
+
+func (m *oauthMockLinkStorage) GetByCode(ctx context.Context, code string) (*storage.Link, error) {
+	return m.GetByCodeTx(ctx, nil, code)
 }
 
 func (m *oauthMockLinkStorage) Update(ctx context.Context, link *storage.Link) error {

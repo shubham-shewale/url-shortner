@@ -3,10 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	"url-shortener/pkg/cache"
+	"url-shortener/pkg/logging"
 	"url-shortener/pkg/middleware"
 	"url-shortener/pkg/storage"
 
@@ -19,10 +23,16 @@ type LinkService struct {
 	storage storage.LinkStorage
 	cache   cache.LinkCacheInterface
 	pool    *pgxpool.Pool
+	logger  *logging.Logger
 }
 
-func NewLinkService(storage storage.LinkStorage, cache cache.LinkCacheInterface, pool *pgxpool.Pool) *LinkService {
-	return &LinkService{storage: storage, cache: cache, pool: pool}
+func NewLinkService(storage storage.LinkStorage, cache cache.LinkCacheInterface, pool *pgxpool.Pool, logger *logging.Logger) *LinkService {
+	return &LinkService{
+		storage: storage,
+		cache:   cache,
+		pool:    pool,
+		logger:  logger,
+	}
 }
 
 type CreateLinkRequest struct {
@@ -41,8 +51,41 @@ type CreateLinkResponse struct {
 
 func (s *LinkService) CreateLink(ctx context.Context, req *CreateLinkRequest) (*CreateLinkResponse, error) {
 	// Validate URL
-	if _, err := url.ParseRequestURI(req.LongURL); err != nil {
+	parsedURL, err := url.ParseRequestURI(req.LongURL)
+	if err != nil {
 		return nil, errors.New("invalid URL")
+	}
+
+	// Log URL validation (safe to log scheme, not full URL)
+	s.logger.LogURLValidation(ctx, true, parsedURL.Scheme)
+
+	// SSRF prevention: Whitelist schemes
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, errors.New("invalid URL scheme: only http and https allowed")
+	}
+
+	// Block private/reserved IPs and localhost
+	host := strings.Split(parsedURL.Host, ":")[0] // Remove port
+	if ip := net.ParseIP(host); ip != nil {
+		// Check private ranges
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return nil, errors.New("invalid URL: private, loopback, or link-local addresses not allowed")
+		}
+		// Block multicast, etc.
+		if ip.IsMulticast() || ip.IsUnspecified() {
+			return nil, errors.New("invalid URL: multicast or unspecified address")
+		}
+	} else {
+		// For hostnames, block common locals
+		hostLower := strings.ToLower(host)
+		if strings.Contains(hostLower, "localhost") || strings.Contains(hostLower, "127.0.0.1") || strings.Contains(hostLower, "0.0.0.0") {
+			return nil, errors.New("invalid URL: localhost or zero address not allowed")
+		}
+	}
+
+	// Additional path checks (e.g., no file:// or javascript:)
+	if strings.HasPrefix(req.LongURL, "file://") || strings.Contains(req.LongURL, "javascript:") {
+		return nil, errors.New("invalid URL: disallowed protocol or scheme")
 	}
 
 	// Validate alias
@@ -61,14 +104,14 @@ func (s *LinkService) CreateLink(ctx context.Context, req *CreateLinkRequest) (*
 		code = *req.Alias
 	}
 
-	// Check if code exists
-	existing, err := s.storage.GetByCode(ctx, code)
-	if err != nil {
-		return nil, err
+	// Get owner_id from context
+	ownerID := middleware.GetOwnerIDFromContext(ctx)
+	if ownerID == uuid.Nil {
+		return nil, errors.New("owner_id not found in context")
 	}
-	if existing != nil {
-		return nil, errors.New("code already exists")
-	}
+
+	// Log link creation without sensitive data
+	s.logger.LogLinkOperation(ctx, "create", code, false) // Will update to true on success
 
 	// Hash password
 	var passwordHash *string
@@ -81,10 +124,20 @@ func (s *LinkService) CreateLink(ctx context.Context, req *CreateLinkRequest) (*
 		passwordHash = &hashStr
 	}
 
-	// Get owner_id from context
-	ownerID := middleware.GetOwnerIDFromContext(ctx)
-	if ownerID == uuid.Nil {
-		return nil, errors.New("owner_id not found in context")
+	// Atomic check and insert using transaction
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) // Rollback if not committed
+
+	// Check if code exists within transaction
+	existing, err := s.storage.GetByCodeTx(ctx, tx, code)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, errors.New("code already exists")
 	}
 
 	link := &storage.Link{
@@ -99,10 +152,17 @@ func (s *LinkService) CreateLink(ctx context.Context, req *CreateLinkRequest) (*
 		OwnerID:      &ownerID,
 	}
 
-	err = s.storage.Create(ctx, link)
+	err = s.storage.CreateTx(ctx, tx, link)
 	if err != nil {
 		return nil, err
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// Log successful creation
+	s.logger.LogLinkOperation(ctx, "create", code, true)
 
 	response := &CreateLinkResponse{
 		Code:     code,

@@ -11,10 +11,13 @@ import (
 
 	"url-shortener/pkg/cache"
 	httpHandlers "url-shortener/pkg/http"
+	"url-shortener/pkg/logging"
+	"url-shortener/pkg/security"
 	"url-shortener/pkg/service"
 	"url-shortener/pkg/storage"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,16 +30,24 @@ func newMockLinkStorage() *mockLinkStorage {
 	return &mockLinkStorage{links: make(map[string]*storage.Link)}
 }
 
-func (m *mockLinkStorage) Create(ctx context.Context, link *storage.Link) error {
+func (m *mockLinkStorage) CreateTx(ctx context.Context, tx pgx.Tx, link *storage.Link) error {
 	m.links[link.Code] = link
 	return nil
 }
 
-func (m *mockLinkStorage) GetByCode(ctx context.Context, code string) (*storage.Link, error) {
+func (m *mockLinkStorage) Create(ctx context.Context, link *storage.Link) error {
+	return m.CreateTx(ctx, nil, link)
+}
+
+func (m *mockLinkStorage) GetByCodeTx(ctx context.Context, tx pgx.Tx, code string) (*storage.Link, error) {
 	if link, exists := m.links[code]; exists {
 		return link, nil
 	}
 	return nil, nil
+}
+
+func (m *mockLinkStorage) GetByCode(ctx context.Context, code string) (*storage.Link, error) {
+	return m.GetByCodeTx(ctx, nil, code)
 }
 
 func (m *mockLinkStorage) Update(ctx context.Context, link *storage.Link) error {
@@ -90,11 +101,14 @@ func TestCreateLinkEndpoint(t *testing.T) {
 	// Setup
 	mockStorage := newMockLinkStorage()
 	mockCache := &mockLinkCache{}
-	linkService := service.NewLinkService(mockStorage, mockCache, nil) // pool not needed for this test
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger) // pool not needed for this test
+	csrfManager := security.NewCSRFTokenManager()
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, nil)
+	noopCSRF := func(next http.Handler) http.Handler { return next } // No CSRF for tests
+	httpHandlers.SetupRoutes(r, handler, nil, noopCSRF)
 
 	// Test data
 	reqBody := map[string]interface{}{
@@ -124,11 +138,14 @@ func TestCreateLinkEndpoint(t *testing.T) {
 func TestHealthCheck(t *testing.T) {
 	mockStorage := newMockLinkStorage()
 	mockCache := &mockLinkCache{}
-	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger)
+	csrfManager := security.NewCSRFTokenManager()
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, nil)
+	noopCSRF := func(next http.Handler) http.Handler { return next }
+	httpHandlers.SetupRoutes(r, handler, nil, noopCSRF)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -153,11 +170,14 @@ func TestGetLinkEndpoint(t *testing.T) {
 	}
 	mockStorage.Create(context.Background(), link)
 
-	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger)
+	csrfManager := security.NewCSRFTokenManager()
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, nil)
+	noopCSRF := func(next http.Handler) http.Handler { return next }
+	httpHandlers.SetupRoutes(r, handler, nil, noopCSRF)
 
 	// Test GET request
 	req := httptest.NewRequest("GET", "/v1/links/test123", nil)
@@ -189,11 +209,14 @@ func TestDeleteLinkEndpoint(t *testing.T) {
 	}
 	mockStorage.Create(context.Background(), link)
 
-	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger)
+	csrfManager := security.NewCSRFTokenManager()
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, nil)
+	noopCSRF := func(next http.Handler) http.Handler { return next }
+	httpHandlers.SetupRoutes(r, handler, nil, noopCSRF)
 
 	// Test DELETE request
 	req := httptest.NewRequest("DELETE", "/v1/links/test123", nil)
@@ -214,11 +237,14 @@ func TestDeleteLinkEndpoint(t *testing.T) {
 func TestInvalidURLError(t *testing.T) {
 	mockStorage := newMockLinkStorage()
 	mockCache := &mockLinkCache{}
-	linkService := service.NewLinkService(mockStorage, mockCache, nil)
-	handler := httpHandlers.NewHandler(linkService)
+	logger := logging.NewLogger(logging.LevelInfo)
+	linkService := service.NewLinkService(mockStorage, mockCache, nil, logger)
+	csrfManager := security.NewCSRFTokenManager()
+	handler := httpHandlers.NewHandler(linkService, csrfManager)
 
 	r := chi.NewRouter()
-	httpHandlers.SetupRoutes(r, handler, nil)
+	noopCSRF := func(next http.Handler) http.Handler { return next }
+	httpHandlers.SetupRoutes(r, handler, nil, noopCSRF)
 
 	// Test with invalid URL
 	reqBody := map[string]interface{}{

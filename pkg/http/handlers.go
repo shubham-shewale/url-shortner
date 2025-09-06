@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"url-shortener/pkg/middleware"
+	"url-shortener/pkg/security"
 	"url-shortener/pkg/service"
 
 	"github.com/go-chi/chi/v5"
@@ -12,10 +13,14 @@ import (
 
 type Handler struct {
 	linkService *service.LinkService
+	csrfManager *security.CSRFTokenManager
 }
 
-func NewHandler(linkService *service.LinkService) *Handler {
-	return &Handler{linkService: linkService}
+func NewHandler(linkService *service.LinkService, csrfManager *security.CSRFTokenManager) *Handler {
+	return &Handler{
+		linkService: linkService,
+		csrfManager: csrfManager,
+	}
 }
 
 func (h *Handler) CreateLink(w http.ResponseWriter, r *http.Request) {
@@ -57,12 +62,22 @@ func (h *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
 	if link.PasswordHash != nil {
 		cookie, err := r.Cookie("verified_" + code)
 		if err != nil || cookie.Value != "true" {
-			// Generate simple CSRF token
-			csrfToken := "csrf_" + code // In production, use proper token generation
+			// Generate secure CSRF token
+			sessionID := getSessionID(r)
+			csrfToken, err := h.csrfManager.GenerateToken(sessionID)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusOK)
 			html := `<html>
-<head><title>Password Required</title></head>
+<head>
+	<title>Password Required</title>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
 <body>
 <h2>Enter Password to Access Link</h2>
 <form method="post" action="/v1/links/` + code + `/verify">
@@ -135,9 +150,9 @@ func (h *Handler) VerifyPassword(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	csrfToken := r.FormValue("csrf_token")
 
-	// Simple CSRF check
-	expectedToken := "csrf_" + code
-	if csrfToken != expectedToken {
+	// Secure CSRF validation
+	sessionID := getSessionID(r)
+	if !h.csrfManager.ValidateToken(sessionID, csrfToken) {
 		http.Error(w, "invalid csrf token", http.StatusForbidden)
 		return
 	}
@@ -147,13 +162,21 @@ func (h *Handler) VerifyPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	// Set secure cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "verified_" + code,
 		Value:    "true",
 		Path:     "/r/" + code,
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   300,
 	})
+
+	// Invalidate CSRF token after use
+	h.csrfManager.InvalidateToken(sessionID)
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -162,9 +185,11 @@ func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func SetupRoutes(r *chi.Mux, handler *Handler, oauthMiddleware *middleware.OAuthMiddleware) {
+func SetupRoutes(r *chi.Mux, handler *Handler, oauthMiddleware *middleware.OAuthMiddleware, csrfMiddleware func(http.Handler) http.Handler) {
 	r.Get("/health", handler.HealthCheck)
-	r.Route("/v1", func(r chi.Router) {
+
+	// Apply CSRF protection to state-changing operations
+	r.With(csrfMiddleware).Route("/v1", func(r chi.Router) {
 		if oauthMiddleware != nil {
 			r.With(oauthMiddleware.Authenticate("links:write")).Post("/links", handler.CreateLink)
 			r.With(oauthMiddleware.Authenticate("links:read")).Get("/links/{code}", handler.GetLink)
@@ -178,5 +203,16 @@ func SetupRoutes(r *chi.Mux, handler *Handler, oauthMiddleware *middleware.OAuth
 		}
 		r.Post("/links/{code}/verify", handler.VerifyPassword)
 	})
+
+	// Redirect endpoint doesn't need CSRF protection (GET request)
 	r.Get("/r/{code}", handler.Redirect)
+}
+
+// Helper function to get session ID from request
+func getSessionID(r *http.Request) string {
+	cookie, err := r.Cookie("session_id")
+	if err != nil || cookie.Value == "" {
+		return "anonymous" // Fallback for requests without session
+	}
+	return cookie.Value
 }
